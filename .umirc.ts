@@ -47,6 +47,11 @@ export default defineConfig({
       path: '/table',
       component: './Table',
     },
+    {
+      name: '容器管理',
+      path: '/container',
+      component: './Container',
+    },
   ],
 
   npmClient: 'npm',
