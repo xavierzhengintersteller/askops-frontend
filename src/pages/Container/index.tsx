@@ -1,12 +1,13 @@
 import {
   Container,
-  getContainerLogs,
+  getContainerLogsRaw,
   getContainers,
   restartContainer,
+  streamContainerLogsFetch,
 } from '@/services/container';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
 import { Button, Drawer, Empty, Space, message } from 'antd';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import styles from './index.less';
 
 const ContainerManage: React.FC = () => {
@@ -16,6 +17,27 @@ const ContainerManage: React.FC = () => {
   const [logs, setLogs] = useState<string>('');
   const [logsLoading, setLogsLoading] = useState(false);
   const actionRef = useRef<any>();
+  const streamRef = useRef<{ abort: () => void } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.abort();
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!logDrawerVisible) {
+      if (streamRef.current) {
+        streamRef.current.abort();
+        streamRef.current = null;
+      }
+      setLogs('');
+      setCurrentContainer('');
+    }
+  }, [logDrawerVisible]);
 
   const handleRestart = async (containerName: string) => {
     try {
@@ -31,15 +53,43 @@ const ContainerManage: React.FC = () => {
   };
 
   const handleViewLogs = async (containerName: string) => {
+    setCurrentContainer(containerName);
+    setLogs('');
+    setLogDrawerVisible(true);
+
+    // Start fetch-based stream (allows Authorization header)
     try {
       setLogsLoading(true);
-      setCurrentContainer(containerName);
-      setLogDrawerVisible(true);
-      const response = await getContainerLogs(containerName, { tail: 100 });
-      setLogs(response);
+      if (streamRef.current) {
+        streamRef.current.abort();
+        streamRef.current = null;
+      }
+      streamRef.current = streamContainerLogsFetch(
+        containerName,
+        (data) => {
+          setLogs((prev) => prev + data + '\n');
+        },
+        (err) => {
+          console.error('stream error', err);
+          if (err && err.code === 401) {
+            message.error(err.message || '未授权，请登录');
+          }
+        },
+      );
     } catch (error: any) {
-      message.error(error?.message || '获取日志失败');
-      setLogs('');
+      message.error(error?.message || '启动日志流失败');
+    } finally {
+      setLogsLoading(false);
+    }
+  };
+
+  const handleFetchRawLogs = async (containerName: string) => {
+    try {
+      setLogsLoading(true);
+      const res = await getContainerLogsRaw(containerName);
+      setLogs(res || '');
+    } catch (err: any) {
+      message.error(err?.message || '获取原始日志失败');
     } finally {
       setLogsLoading(false);
     }
@@ -157,10 +207,35 @@ const ContainerManage: React.FC = () => {
       <Drawer
         title={`容器日志 - ${currentContainer}`}
         placement="right"
-        onClose={() => setLogDrawerVisible(false)}
+        onClose={() => {
+          setLogDrawerVisible(false);
+        }}
         open={logDrawerVisible}
         width={800}
       >
+        <div style={{ marginBottom: 12 }}>
+          <Button
+            size="small"
+            onClick={() => handleFetchRawLogs(currentContainer)}
+            style={{ marginRight: 8 }}
+          >
+            获取最近100行
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              // restart stream
+              if (streamRef.current) {
+                streamRef.current.abort();
+                streamRef.current = null;
+              }
+              if (currentContainer) handleViewLogs(currentContainer);
+            }}
+          >
+            重新订阅实时日志
+          </Button>
+        </div>
+
         {logsLoading ? (
           <div>加载中...</div>
         ) : logs ? (
