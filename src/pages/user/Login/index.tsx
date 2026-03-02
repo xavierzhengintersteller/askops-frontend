@@ -15,8 +15,8 @@ export default function LoginPage() {
       const res = await login(values);
 
       // 存储 token 到 localStorage
-      localStorage.setItem('token', res.data.token);
-
+      localStorage.setItem('accessToken', res.data.accessToken);
+      localStorage.setItem('refreshToken', res.data.refreshToken);
       // 更新全局状态（可选，如用户信息）
       setInitialState({
         currentUser: res.user,

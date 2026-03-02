@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES6",
+    "module": "ESNext",
+    "esModuleInterop": true, // 必须开启
+    "jsx": "react-jsx", // React 17+ 推荐
+    "moduleResolution": "Node",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"] // 路径映射，和 Jest 保持一致
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
