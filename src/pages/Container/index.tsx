@@ -1,16 +1,24 @@
 import {
   Container,
-  getContainerLogsRaw,
+  batchRestartContainers,
   getContainers,
   restartContainer,
-  streamContainerLogsFetch,
 } from '@/services/container';
 import { PageContainer, ProTable } from '@ant-design/pro-components';
-import { Button, Drawer, Empty, Modal, Space, Tag, message } from 'antd';
-import React, { useEffect, useRef, useState } from 'react';
-import styles from './index.less';
+// 👇 这里加上 message ！！！
+import { handleRequestError } from '@/utils/requestError';
+import {
+  Button,
+  Descriptions,
+  Modal,
+  Popover,
+  Space,
+  Tag,
+  message,
+} from 'antd';
+import { isEqual } from 'lodash';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
-// 定义容器状态映射（增强可视化）
 const CONTAINER_STATE_MAP = {
   running: { color: 'success', text: '运行中' },
   exited: { color: 'error', text: '已停止' },
@@ -20,82 +28,96 @@ const CONTAINER_STATE_MAP = {
 };
 
 const ContainerManage: React.FC = () => {
-  // 1. 状态定义（修复命名错误 + 细化）
+  const actionRef = useRef<any>();
   const [restartLoading, setRestartLoading] = useState<Record<string, boolean>>(
     {},
   );
-  const [streamLogsLoading, setStreamLogsLoading] = useState(false);
-  const [rawLogsLoading, setRawLogsLoading] = useState(false);
+  const [batchRestartLoading, setBatchRestartLoading] = useState(false);
+  const [selectedRows, setSelectedRows] = useState<Container[]>([]);
+  const [tableData, setTableData] = useState<Container[]>([]);
 
-  const [logDrawerVisible, setLogDrawerVisible] = useState(false);
-  const [currentContainer, setCurrentContainer] = useState<string>('');
-  const [logs, setLogs] = useState<string>('');
+  // 分页
+  const [pagination, setPagination] = useState({
+    current: 1,
+    pageSize: 10,
+  });
 
-  const actionRef = useRef<any>();
-  const streamRef = useRef<{ abort: () => void } | null>(null);
-  const logContainerRef = useRef<HTMLPreElement>(null); // 日志容器ref（用于自动滚动）
+  // 搜索
+  const [searchText, setSearchText] = useState('');
 
-  // 2. 清理日志流（组件卸载/抽屉关闭）
+  // 排序
+  const [sortField, setSortField] = useState<string | undefined>(undefined);
+  const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | undefined>(
+    undefined,
+  );
+
+  // 1s 轮询
   useEffect(() => {
-    return () => {
-      if (streamRef.current) {
-        streamRef.current.abort();
-        streamRef.current = null;
-      }
+    const fetchData = async () => {
+      try {
+        const data = await getContainers();
+        setTableData((prev) => (isEqual(prev, data) ? prev : data));
+      } catch (err) {}
     };
+    fetchData();
+    const timer = setInterval(fetchData, 1000);
+    return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!logDrawerVisible) {
-      if (streamRef.current) {
-        streamRef.current.abort();
-        streamRef.current = null;
-      }
-      setLogs('');
-      setCurrentContainer('');
-      setStreamLogsLoading(false);
-      setRawLogsLoading(false);
-    }
-  }, [logDrawerVisible]);
+  // 搜索 + 排序过滤
+  const filteredData = useMemo(() => {
+    let data = [...tableData];
 
-  // 3. 日志自动滚动到底部
-  useEffect(() => {
-    if (logContainerRef.current) {
-      logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+    if (searchText) {
+      const txt = searchText.toLowerCase();
+      data = data.filter((item) => {
+        const name = (item.Names?.[0] || '').toLowerCase();
+        const image = (item.Image || '').toLowerCase();
+        return name.includes(txt) || image.includes(txt);
+      });
     }
-  }, [logs]);
 
-  // 4. 重启容器（增加二次确认 + 空值校验）
-  const handleRestart = async (containerName: string) => {
-    // 空值校验
-    if (!containerName) {
-      message.warning('容器名称为空，无法重启');
+    if (sortField) {
+      data.sort((a, b) => {
+        let aVal = '';
+        let bVal = '';
+
+        if (sortField === 'Names') {
+          aVal = (a.Names?.[0] || '').toLowerCase();
+          bVal = (b.Names?.[0] || '').toLowerCase();
+        } else {
+          aVal = String(a[sortField as keyof Container] || '').toLowerCase();
+          bVal = String(b[sortField as keyof Container] || '').toLowerCase();
+        }
+
+        if (aVal < bVal) return sortOrder === 'ascend' ? -1 : 1;
+        if (aVal > bVal) return sortOrder === 'ascend' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return data;
+  }, [tableData, searchText, sortField, sortOrder]);
+
+  // 单个重启
+  const handleRestart = async (containerName: string, nodeIp: string) => {
+    if (!containerName || !nodeIp) {
+      message.warning('容器信息不完整');
       return;
     }
 
-    // 二次确认
     Modal.confirm({
       title: '确认重启容器',
-      content: `是否确认重启容器 ${containerName}？重启可能导致服务中断，请谨慎操作！`,
-      okText: '确认重启',
-      cancelText: '取消',
+      content: `是否重启容器：${containerName}？`,
       onOk: async () => {
         try {
           setRestartLoading((prev) => ({ ...prev, [containerName]: true }));
-          const result = await restartContainer(containerName);
-
-          if (result && result.code === 403) {
-            message.error('没有权限重启此容器');
-            return;
-          }
-
-          message.success(`容器 ${containerName} 重启成功`);
-          actionRef.current?.reload();
+          await restartContainer({ containerName, nodeIp });
+          message.success('重启成功');
         } catch (error: any) {
-          if (error?.response?.data?.code === 403 || error?.code === 403) {
-            message.error('没有权限重启此容器');
-          } else {
-            message.error(error?.message || '重启失败');
+          if (handleRequestError(error)) {
+            setRestartLoading((prev) => ({ ...prev, [containerName]: false }));
+            return;
           }
         } finally {
           setRestartLoading((prev) => ({ ...prev, [containerName]: false }));
@@ -104,119 +126,99 @@ const ContainerManage: React.FC = () => {
     });
   };
 
-  // 5. 查看实时日志（增加空值校验）
-  const handleViewLogs = async (containerName: string) => {
-    if (!containerName) {
-      message.warning('容器名称为空，无法查看日志');
+  // 批量重启
+  const handleBatchRestart = async () => {
+    if (selectedRows.length === 0) {
+      message.warning('请选择容器');
       return;
     }
 
-    setCurrentContainer(containerName);
-    setLogs('');
-    setLogDrawerVisible(true);
+    Modal.confirm({
+      title: `确认批量重启 ${selectedRows.length} 个容器？`,
+      onOk: async () => {
+        try {
+          setBatchRestartLoading(true);
+          const items = selectedRows
+            .map((item) => ({
+              containerName: item.Names?.[0]?.replace(/^\//, '') || '',
+              nodeIp: item.nodeIp || '',
+            }))
+            .filter((i) => i.containerName && i.nodeIp);
 
-    try {
-      setStreamLogsLoading(true);
-      // 先终止旧的日志流
-      if (streamRef.current) {
-        streamRef.current.abort();
-        streamRef.current = null;
-      }
-      // 启动新的日志流
-      streamRef.current = streamContainerLogsFetch(
-        containerName,
-        (data) => {
-          setLogs((prev) => prev + data + '\n');
-        },
-        (err) => {
-          console.error('stream error', err);
-          if (err && err.code === 401) {
-            message.error(err.message || '未授权，请登录');
-          }
-          setStreamLogsLoading(false);
-        },
-      );
-    } catch (error: any) {
-      message.error(error?.message || '启动日志流失败');
-      setStreamLogsLoading(false);
-    }
+          await batchRestartContainers({ containerItems: items });
+          message.success('批量重启成功');
+          setSelectedRows([]);
+        } catch (error: any) {
+          handleRequestError(error);
+        } finally {
+          setBatchRestartLoading(false);
+        }
+      },
+    });
   };
 
-  // 6. 获取原始日志（修复变量名错误 + 空值校验）
-  const handleFetchRawLogs = async (containerName: string) => {
-    if (!containerName) {
-      message.warning('容器名称为空，无法获取日志');
-      return;
-    }
+  // 悬浮详情内容
+  const renderDetailContent = (record: Container) => (
+    <div style={{ width: 380, fontSize: 12 }}>
+      <Descriptions column={1} bordered size="small">
+        <Descriptions.Item label="容器ID">{record.Id}</Descriptions.Item>
+        <Descriptions.Item label="容器Name">
+          {record.Names?.[0]?.replace(/^\//, '') || '-'}
+        </Descriptions.Item>
+        <Descriptions.Item label="镜像">{record.Image}</Descriptions.Item>
+        <Descriptions.Item label="状态">
+          <Tag
+            color={
+              CONTAINER_STATE_MAP[
+                record.State as keyof typeof CONTAINER_STATE_MAP
+              ]?.color || 'default'
+            }
+          >
+            {CONTAINER_STATE_MAP[
+              record.State as keyof typeof CONTAINER_STATE_MAP
+            ]?.text || record.State}
+          </Tag>
+        </Descriptions.Item>
+        <Descriptions.Item label="运行状态">{record.Status}</Descriptions.Item>
+        <Descriptions.Item label="节点IP">{record.nodeIp}</Descriptions.Item>
+        <Descriptions.Item label="创建时间">
+          {new Date(record.Created * 1000).toLocaleString()}
+        </Descriptions.Item>
+        <Descriptions.Item label="启动命令">{record.Command}</Descriptions.Item>
+      </Descriptions>
+    </div>
+  );
 
-    try {
-      setRawLogsLoading(true);
-      const res = await getContainerLogsRaw(containerName);
-      setLogs(res || '');
-    } catch (err: any) {
-      message.error(err?.message || '获取原始日志失败');
-    } finally {
-      setRawLogsLoading(false);
-    }
-  };
-
-  // 7. 停止日志流（新增）
-  const handleStopStreamLogs = () => {
-    if (streamRef.current) {
-      streamRef.current.abort();
-      streamRef.current = null;
-      setStreamLogsLoading(false);
-      message.info('已停止实时日志订阅');
-    }
-  };
-
-  // 8. 表格列配置（修复空值 + 增强筛选/可视化）
   const columns = [
     {
       title: '容器名称',
       dataIndex: 'Names',
       key: 'Names',
       width: 150,
-      // 增强空值保护
-      render: (names: string[]) => {
-        if (!Array.isArray(names) || names.length === 0) return '-';
-        return names[0]?.replace(/^\//g, '') || '-';
-      },
-      // 增加搜索筛选
-      search: {
-        placeholder: '请输入容器名称',
-      },
+      sorter: true,
+      render: (names: string[]) => names?.[0]?.replace(/^\//g, '') || '-',
     },
     {
       title: '镜像',
       dataIndex: 'Image',
       key: 'Image',
       width: 220,
-      search: {
-        placeholder: '请输入镜像名称',
-      },
+      sorter: true,
     },
     {
       title: '状态',
       dataIndex: 'State',
       key: 'State',
       width: 100,
-      // 替换为 Tag 组件，增强可视化
       render: (text: string) => {
-        const status = CONTAINER_STATE_MAP[
+        const s = CONTAINER_STATE_MAP[
           text as keyof typeof CONTAINER_STATE_MAP
         ] || {
           color: 'default',
-          text: text || '未知',
+          text: '未知',
         };
-        return <Tag color={status.color}>{status.text}</Tag>;
+        return <Tag color={s.color}>{s.text}</Tag>;
       },
-      // 增加状态筛选
-      filters: Object.entries(CONTAINER_STATE_MAP).map(([key, value]) => ({
-        text: value.text,
-        value: key,
-      })),
-      onFilter: (value, record) => record.State === value,
     },
     {
       title: '运行信息',
@@ -225,50 +227,38 @@ const ContainerManage: React.FC = () => {
       width: 150,
     },
     {
-      title: '端口映射',
-      dataIndex: 'Ports',
-      key: 'Ports',
-      width: 200,
-      // 修复空值 + key 问题
-      render: (ports: any[]) => {
-        if (!Array.isArray(ports) || ports.length === 0) return '-';
-        return (
-          <div>
-            {ports.map((port, idx) => (
-              <div key={`${port.PrivatePort || idx}-${port.Type || 'tcp'}`}>
-                {port.PublicPort || '-'}:{port.PrivatePort || '-'}/
-                {port.Type || 'tcp'}
-              </div>
-            ))}
-          </div>
-        );
-      },
+      title: '节点IP',
+      dataIndex: 'nodeIp',
+      key: 'nodeIp',
+      width: 140,
     },
     {
       title: '操作',
-      key: 'action',
       width: 240,
       render: (_: any, record: Container) => {
-        const containerName = record.Names?.[0]?.replace(/^\//g, '') || '';
+        const name = record.Names?.[0]?.replace(/^\//g, '') || '';
         return (
           <Space size="small">
+            {/* 鼠标悬浮显示详情 */}
+            <Popover
+              content={renderDetailContent(record)}
+              trigger="hover"
+              placement="right"
+              arrow={true}
+            >
+              <Button size="small" type="text">
+                详情
+              </Button>
+            </Popover>
+
             <Button
               type="primary"
               size="small"
-              loading={restartLoading[containerName]}
-              onClick={() => handleRestart(containerName)}
-              // 可选：增加权限控制（比如从全局状态获取权限）
-              // disabled={!hasPermission('container:restart')}
+              danger
+              loading={restartLoading[name]}
+              onClick={() => handleRestart(name, record.nodeIp || '')}
             >
               重启
-            </Button>
-            <Button
-              type="default"
-              size="small"
-              loading={streamLogsLoading}
-              onClick={() => handleViewLogs(containerName)}
-            >
-              查看日志
             </Button>
           </Space>
         );
@@ -281,96 +271,49 @@ const ContainerManage: React.FC = () => {
       <ProTable<Container>
         columns={columns}
         actionRef={actionRef}
-        request={async () => {
-          try {
-            const data = await getContainers();
-            return {
-              data: data || [],
-              success: true,
-            };
-          } catch (error) {
-            message.error('获取容器列表失败');
-            return {
-              data: [],
-              success: false,
-            };
-          }
-        }}
+        dataSource={filteredData}
+        request={undefined}
         rowKey="Id"
-        // 开启搜索功能
         search={{
           labelWidth: 80,
-          collapsed: false,
+          onChange: (val) => setSearchText(String(val || '').trim()),
         }}
-        options={{
-          reload: true,
-          setting: true, // 允许用户自定义列
-          density: true, // 支持调整行密度
+        onSort={(s) => {
+          setSortField(s.field);
+          setSortOrder(s.order);
         }}
         pagination={{
-          pageSize: 10,
-          showSizeChanger: true, // 允许调整页大小
-          showQuickJumper: true, // 快速跳页
-          showTotal: (total) => `共 ${total} 个容器`,
+          ...pagination,
+          total: filteredData.length,
+          showSizeChanger: true,
+          showQuickJumper: true,
+          pageSizeOptions: ['10', '20', '50', '100'],
+          showTotal: (total) => {
+            const start = (pagination.current - 1) * pagination.pageSize + 1;
+            const end = Math.min(
+              pagination.current * pagination.pageSize,
+              total,
+            );
+            return `第 ${start}-${end} 条/总共 ${total} 条`;
+          },
+          onChange: (current, pageSize) => setPagination({ current, pageSize }),
+          onShowSizeChange: (_, pageSize) =>
+            setPagination((prev) => ({ ...prev, pageSize })),
         }}
-        // 增加表格边框，提升可读性
         bordered
+        rowSelection={{ onChange: (_, rows) => setSelectedRows(rows) }}
+        toolBarRender={() => [
+          <Button
+            key="batch"
+            type="primary"
+            danger
+            loading={batchRestartLoading}
+            onClick={handleBatchRestart}
+          >
+            批量重启
+          </Button>,
+        ]}
       />
-
-      {/* 日志抽屉（支持调整宽度 + 增强操作） */}
-      <Drawer
-        title={`容器日志 - ${currentContainer}`}
-        placement="right"
-        onClose={() => setLogDrawerVisible(false)}
-        open={logDrawerVisible}
-        width={800}
-        resizable // 支持调整宽度
-        destroyOnClose // 关闭时销毁内容，避免内存泄漏
-      >
-        <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
-          <Button
-            size="small"
-            type="default"
-            loading={rawLogsLoading}
-            onClick={() => handleFetchRawLogs(currentContainer)}
-          >
-            获取最近100行
-          </Button>
-          <Button
-            size="small"
-            type="default"
-            loading={streamLogsLoading}
-            onClick={() => handleViewLogs(currentContainer)}
-          >
-            重新订阅实时日志
-          </Button>
-          <Button
-            size="small"
-            type="danger"
-            onClick={handleStopStreamLogs}
-            disabled={!streamRef.current}
-          >
-            停止日志流
-          </Button>
-        </div>
-
-        {/* 日志展示区域（固定高度 + 自动滚动） */}
-        {streamLogsLoading || rawLogsLoading ? (
-          <div style={{ textAlign: 'center', padding: 20 }}>加载中...</div>
-        ) : logs ? (
-          <pre
-            className={styles.logContainer}
-            ref={logContainerRef}
-            style={{
-              margin: 0,
-            }}
-          >
-            {logs}
-          </pre>
-        ) : (
-          <Empty description="暂无日志数据" />
-        )}
-      </Drawer>
     </PageContainer>
   );
 };

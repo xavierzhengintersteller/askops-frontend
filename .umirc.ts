@@ -50,7 +50,7 @@ export default defineConfig({
     {
       name: '容器管理',
       path: '/container',
-      component: './Container',
+      component: './container',
     },
   ],
 

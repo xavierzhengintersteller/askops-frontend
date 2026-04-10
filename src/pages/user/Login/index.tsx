@@ -1,30 +1,38 @@
-import { login } from '@/services/auth';
-import { Button, Form, Input, message } from 'antd';
-// src/pages/Login.tsx
+import { fetchPermissionMenu, login } from '@/services/auth';
 import { useModel } from '@umijs/max';
+import { Button, Form, Input, message } from 'antd';
 import { useState } from 'react';
 import { history } from 'umi';
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
-  const { setInitialState } = useModel('@@initialState'); // 更新全局状态
+  const { setInitialState } = useModel('@@initialState');
 
-  const onFinish = async (values: { username: string; password: string }) => {
+  const onFinish = async (values) => {
     setLoading(true);
     try {
       const res = await login(values);
+      const { accessToken, refreshToken, permissionVersion } = res.data;
 
-      // 存储 token 到 localStorage
-      localStorage.setItem('accessToken', res.data.accessToken);
-      localStorage.setItem('refreshToken', res.data.refreshToken);
-      // 更新全局状态（可选，如用户信息）
+      localStorage.setItem('accessToken', accessToken);
+      localStorage.setItem('refreshToken', refreshToken);
+      localStorage.setItem('permissionVersion', permissionVersion);
+
+      // ✅ 登录成功后拉取菜单
+      const menuRes = await fetchPermissionMenu();
+      const { leftMenuTree, permissionCodes } = menuRes.data;
+
+      localStorage.setItem('menuTree', JSON.stringify(leftMenuTree));
+      localStorage.setItem('permissionCodes', JSON.stringify(permissionCodes));
+
       setInitialState({
-        currentUser: res.user,
+        currentUser: res.data,
+        menuTree: leftMenuTree,
+        permissionCodes,
       });
 
-      // 跳转到首页
-      history.push('/homeee');
       message.success('登录成功');
+      history.push('/');
     } catch (error) {
       message.error(error.message || '登录失败');
     } finally {
