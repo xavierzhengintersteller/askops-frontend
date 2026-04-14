@@ -1,41 +1,74 @@
-import { request } from '@umijs/max';
-
+import { message } from 'antd';
+import { request } from 'umi';
 export interface Container {
   Id: string;
-  Names: string[];
+  Names?: string[];
   Image: string;
-  ImageID: string;
   State: string;
   Status: string;
-  nodeIp?: string; // 新增：节点IP
-  Ports?: Array<{
-    PrivatePort: number;
-    PublicPort: number;
-    Type: string;
-  }>;
-  Mounts?: any[];
+  nodeIp?: string;
   Created: number;
-  Labels?: Record<string, string>;
+  Command: string;
 }
 
 export interface ContainerResponse {
   code: number;
   message: string;
-  data: string;
+  data: Container[] | string | null;
+}
+
+// 重启参数
+export interface RestartContainerParams {
+  containerName: string;
+  nodeIp: string;
+}
+
+// 批量重启
+export interface BatchRestartContainerRequest {
+  containerItems: {
+    containerName: string;
+    nodeIp: string;
+  }[];
+}
+
+export interface BatchRestartContainerResponse {
+  total: number;
+  success: number;
+  fail: number;
+  results: {
+    containerName: string;
+    nodeIp: string;
+    success: boolean;
+    message?: string;
+  }[];
 }
 
 // ==========================
-// 1. 获取容器列表
+// 获取容器列表（支持多选节点 + manual）
 // ==========================
-export async function getContainers(options?: { [key: string]: any }) {
+export async function getContainers(
+  nodeIps?: string[],
+  manual: boolean = false,
+) {
+  const params = nodeIps?.length
+    ? { nodeIps: nodeIps.join(','), manual }
+    : { manual };
+
   const response = await request<ContainerResponse>(
     '/api/containers/containers',
     {
       method: 'GET',
-      ...(options || {}),
+      params,
     },
   );
 
+  // 无可用节点提示
+  if (response?.code === 100001) {
+    // message.warning(response.message);
+    return [];
+  }
+
+  // 解析字符串格式数据
   if (response?.data && typeof response.data === 'string') {
     try {
       return JSON.parse(response.data);
@@ -44,45 +77,44 @@ export async function getContainers(options?: { [key: string]: any }) {
       return [];
     }
   }
+
   return response?.data || [];
 }
 
 // ==========================
-// 2. 单个重启（POST + JSON Body）
-// ==========================
-export async function restartContainer(data: {
-  containerName: string;
-  nodeIp: string;
-}) {
-  return request('/api/containers/restart', {
-    method: 'POST',
-    data,
-  });
-}
-
-// ==========================
-// 3. 批量重启
-// ==========================
-export async function batchRestartContainers(data: {
-  containerItems: Array<{ containerName: string; nodeIp: string }>;
-}) {
-  return request('/api/containers/batch-restart', {
-    method: 'POST',
-    data,
-  });
-}
-
 // 获取节点列表
+// ==========================
 export async function getNodeList() {
-  return request('/api/agent/nodes', {
+  const res = await request('/api/agent/nodes', {
     method: 'GET',
   });
+
+  // ✅ 全局统一：只要不是 0，都提示 message
+  if (res.code !== 0) {
+    message.warning(res.message);
+  }
+
+  return res;
 }
 
-// 获取容器列表（支持 nodeIp 参数）
-// export async function getContainers(nodeIp?: string) {
-//   return request('/api/containers/containers', {
-//     method: 'GET',
-//     params: { nodeIp },
-//   });
-// }
+// ==========================
+// 重启单个容器
+// ==========================
+export async function restartContainer(params: RestartContainerParams) {
+  return request('/api/containers/restart', {
+    method: 'POST',
+    data: params,
+  });
+}
+
+// ==========================
+// 批量重启
+// ==========================
+export async function batchRestartContainers(
+  params: BatchRestartContainerRequest,
+) {
+  return request('/api/containers/batch-restart', {
+    method: 'POST',
+    data: params,
+  });
+}

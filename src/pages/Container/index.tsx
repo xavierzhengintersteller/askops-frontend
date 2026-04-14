@@ -1,20 +1,22 @@
 import {
-  Container,
   batchRestartContainers,
+  Container,
   getContainers,
+  getNodeList,
   restartContainer,
 } from '@/services/container';
-import { PageContainer, ProTable } from '@ant-design/pro-components';
-// 👇 这里加上 message ！！！
 import { handleRequestError } from '@/utils/requestError';
+import { PageContainer, ProTable } from '@ant-design/pro-components';
 import {
   Button,
   Descriptions,
+  Input,
+  message,
   Modal,
   Popover,
+  Select,
   Space,
   Tag,
-  message,
 } from 'antd';
 import { isEqual } from 'lodash';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -51,20 +53,57 @@ const ContainerManage: React.FC = () => {
     undefined,
   );
 
-  // 1s 轮询
+  // 节点筛选
+  const [nodeList, setNodeList] = useState<{ ip: string; port: number }[]>([]);
+  const [selectedNodeIps, setSelectedNodeIps] = useState<string[]>(['all']);
+
+  // 拉节点列表
+  useEffect(() => {
+    const fetchNodes = async () => {
+      const res = await getNodeList();
+      if (res.code === 0) {
+        setNodeList(res.data || []);
+      } else {
+        setNodeList([]);
+      }
+    };
+    fetchNodes();
+  }, []);
+
+  // 拉容器列表（自动轮询）
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const data = await getContainers();
+        const params = selectedNodeIps.includes('all')
+          ? undefined
+          : selectedNodeIps;
+        const data = await getContainers(params, false);
         setTableData((prev) => (isEqual(prev, data) ? prev : data));
-      } catch (err) {}
+      } catch (err) {
+        console.error('获取容器失败', err);
+      }
     };
-    fetchData();
-    const timer = setInterval(fetchData, 1000);
-    return () => clearInterval(timer);
-  }, []);
 
-  // 搜索 + 排序过滤
+    fetchData();
+    const timer = setInterval(fetchData, 30000);
+    return () => clearInterval(timer);
+  }, [selectedNodeIps]);
+
+  // 手动刷新
+  const handleManualRefresh = async () => {
+    try {
+      const params = selectedNodeIps.includes('all')
+        ? undefined
+        : selectedNodeIps;
+      const data = await getContainers(params, true);
+      setTableData((prev) => (isEqual(prev, data) ? prev : data));
+      message.success('刷新成功');
+    } catch (err) {
+      console.error('手动刷新失败', err);
+    }
+  };
+
+  // 搜索 + 排序
   const filteredData = useMemo(() => {
     let data = [...tableData];
 
@@ -77,11 +116,10 @@ const ContainerManage: React.FC = () => {
       });
     }
 
-    if (sortField) {
+    if (sortField && sortOrder) {
       data.sort((a, b) => {
         let aVal = '';
         let bVal = '';
-
         if (sortField === 'Names') {
           aVal = (a.Names?.[0] || '').toLowerCase();
           bVal = (b.Names?.[0] || '').toLowerCase();
@@ -89,7 +127,6 @@ const ContainerManage: React.FC = () => {
           aVal = String(a[sortField as keyof Container] || '').toLowerCase();
           bVal = String(b[sortField as keyof Container] || '').toLowerCase();
         }
-
         if (aVal < bVal) return sortOrder === 'ascend' ? -1 : 1;
         if (aVal > bVal) return sortOrder === 'ascend' ? 1 : -1;
         return 0;
@@ -105,7 +142,6 @@ const ContainerManage: React.FC = () => {
       message.warning('容器信息不完整');
       return;
     }
-
     Modal.confirm({
       title: '确认重启容器',
       content: `是否重启容器：${containerName}？`,
@@ -115,10 +151,7 @@ const ContainerManage: React.FC = () => {
           await restartContainer({ containerName, nodeIp });
           message.success('重启成功');
         } catch (error: any) {
-          if (handleRequestError(error)) {
-            setRestartLoading((prev) => ({ ...prev, [containerName]: false }));
-            return;
-          }
+          handleRequestError(error);
         } finally {
           setRestartLoading((prev) => ({ ...prev, [containerName]: false }));
         }
@@ -132,7 +165,6 @@ const ContainerManage: React.FC = () => {
       message.warning('请选择容器');
       return;
     }
-
     Modal.confirm({
       title: `确认批量重启 ${selectedRows.length} 个容器？`,
       onOk: async () => {
@@ -144,7 +176,6 @@ const ContainerManage: React.FC = () => {
               nodeIp: item.nodeIp || '',
             }))
             .filter((i) => i.containerName && i.nodeIp);
-
           await batchRestartContainers({ containerItems: items });
           message.success('批量重启成功');
           setSelectedRows([]);
@@ -157,7 +188,7 @@ const ContainerManage: React.FC = () => {
     });
   };
 
-  // 悬浮详情内容
+  // 详情浮层
   const renderDetailContent = (record: Container) => (
     <div style={{ width: 380, fontSize: 12 }}>
       <Descriptions column={1} bordered size="small">
@@ -210,6 +241,7 @@ const ContainerManage: React.FC = () => {
       dataIndex: 'State',
       key: 'State',
       width: 100,
+      sorter: true,
       render: (text: string) => {
         const s = CONTAINER_STATE_MAP[
           text as keyof typeof CONTAINER_STATE_MAP
@@ -239,12 +271,11 @@ const ContainerManage: React.FC = () => {
         const name = record.Names?.[0]?.replace(/^\//g, '') || '';
         return (
           <Space size="small">
-            {/* 鼠标悬浮显示详情 */}
             <Popover
               content={renderDetailContent(record)}
               trigger="hover"
               placement="right"
-              arrow={true}
+              arrow
             >
               <Button size="small" type="text">
                 详情
@@ -268,15 +299,48 @@ const ContainerManage: React.FC = () => {
 
   return (
     <PageContainer title="容器管理">
+      <Space style={{ marginBottom: 16 }}>
+        <Select
+          placeholder="选择节点"
+          style={{ width: 320 }}
+          mode="multiple"
+          allowClear
+          value={selectedNodeIps}
+          onChange={(val) => {
+            if (val.includes('all')) {
+              setSelectedNodeIps(['all']);
+            } else {
+              setSelectedNodeIps(val);
+            }
+          }}
+          options={[
+            { label: '全部节点', value: 'all' },
+            ...nodeList.map((n) => ({ label: n.ip, value: n.ip })),
+          ]}
+        />
+
+        <Input
+          placeholder="搜索容器名称/镜像"
+          style={{ width: 280 }}
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          allowClear
+        />
+
+        <Button onClick={handleManualRefresh} type="default">
+          手动刷新
+        </Button>
+      </Space>
+
       <ProTable<Container>
         columns={columns}
         actionRef={actionRef}
         dataSource={filteredData}
-        request={undefined}
         rowKey="Id"
-        search={{
-          labelWidth: 80,
-          onChange: (val) => setSearchText(String(val || '').trim()),
+        search={false}
+        sort={{
+          field: sortField,
+          order: sortOrder,
         }}
         onSort={(s) => {
           setSortField(s.field);
@@ -288,17 +352,7 @@ const ContainerManage: React.FC = () => {
           showSizeChanger: true,
           showQuickJumper: true,
           pageSizeOptions: ['10', '20', '50', '100'],
-          showTotal: (total) => {
-            const start = (pagination.current - 1) * pagination.pageSize + 1;
-            const end = Math.min(
-              pagination.current * pagination.pageSize,
-              total,
-            );
-            return `第 ${start}-${end} 条/总共 ${total} 条`;
-          },
           onChange: (current, pageSize) => setPagination({ current, pageSize }),
-          onShowSizeChange: (_, pageSize) =>
-            setPagination((prev) => ({ ...prev, pageSize })),
         }}
         bordered
         rowSelection={{ onChange: (_, rows) => setSelectedRows(rows) }}
