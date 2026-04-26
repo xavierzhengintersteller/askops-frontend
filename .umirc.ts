@@ -38,19 +38,24 @@ export default defineConfig({
       component: './Homeee',
     },
     {
-      name: '权限演示',
-      path: '/access',
-      component: './Access',
-    },
-    {
-      name: 'CRUD 示例',
-      path: '/table',
-      component: './Table',
-    },
-    {
       name: '容器管理',
       path: '/container',
       component: './container',
+    },
+    {
+      name: '系统管理',
+      path: '/admin',
+      component: './admin',
+      routes: [
+        { path: '/admin', redirect: '/admin/user' },
+        { name: '用户管理', path: '/admin/user', component: './admin/user' },
+        { name: '角色管理', path: '/admin/role', component: './admin/role' },
+        {
+          name: '权限管理',
+          path: '/admin/permission',
+          component: './admin/permission',
+        },
+      ],
     },
   ],
 
