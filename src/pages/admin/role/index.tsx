@@ -10,28 +10,37 @@ import {
   Popconfirm,
   Table,
   Transfer,
-  Tree,
+  TreeSelect,
 } from 'antd';
 import { useState } from 'react';
+
+// 递归转换成 TreeSelect 要求的标准树结构
+const convertPermTree = (list: any[]): any[] => {
+  if (!Array.isArray(list)) return [];
+  return list.map((item) => {
+    return {
+      title: item.permissionName,
+      value: String(item.id),
+      children: convertPermTree(item.children),
+    };
+  });
+};
 
 export default function AdminRole() {
   const [form] = Form.useForm();
 
-  // 弹窗状态
   const [permVisible, setPermVisible] = useState(false);
   const [groupVisible, setGroupVisible] = useState(false);
   const [addRoleVisible, setAddRoleVisible] = useState(false);
 
-  // 当前编辑角色【全部用 string 存储 ID，避免精度丢失】
   const [currentRole, setCurrentRole] = useState<{
     id: string;
     roleName: string;
     roleCode: string;
   } | null>(null);
 
-  // 权限勾选
+  // 权限选中值
   const [permKeys, setPermKeys] = useState<string[]>([]);
-  // 组勾选
   const [groupKeys, setGroupKeys] = useState<string[]>([]);
 
   // 角色列表
@@ -41,19 +50,19 @@ export default function AdminRole() {
     refresh,
   } = useRequest(() => request('/api/admin/role/detail/list'));
 
-  // 权限树
-  const { data: permTree } = useRequest(() =>
-    request('/api/admin/permission/list'),
-  );
+  // 权限树 + 前端结构转换
+  const { data: permTree } = useRequest(async () => {
+    const res = await request('/api/admin/permission/list');
+    return convertPermTree(res.data || []);
+  });
 
   // 所有组
   const { data: allGroup } = useRequest(() =>
     request('/api/admin/role-group/list'),
   );
 
-  // 打开分配权限
+  // 打开分配权限弹窗 + 回显已选权限
   const openPermModal = async (record: any) => {
-    // 保存 string 类型 ID
     setCurrentRole({ ...record, id: String(record.id) });
     const res = await request(
       `/api/admin/role/permission/ids?roleId=${record.id}`,
@@ -67,8 +76,8 @@ export default function AdminRole() {
     await request('/api/admin/role-permission/assign', {
       method: 'POST',
       data: {
-        roleId: currentRole!.id, // string 类型，不丢精度
-        permissionIds: permKeys,
+        roleId: Number(currentRole!.id),
+        permissionIds: permKeys.map(Number),
       },
     });
     message.success('权限分配成功');
@@ -91,8 +100,8 @@ export default function AdminRole() {
     await request('/api/admin/role-group/assign', {
       method: 'POST',
       data: {
-        roleId: currentRole!.id,
-        groupIds: groupKeys,
+        roleId: Number(currentRole!.id),
+        groupIds: groupKeys.map(Number),
       },
     });
     message.success('组分配成功');
@@ -177,24 +186,29 @@ export default function AdminRole() {
         pagination={{ pageSize: 10 }}
       />
 
-      {/* 分配权限弹窗 */}
+      {/* 分配权限弹窗 TreeSelect 完美版 */}
       <Modal
         open={permVisible}
         title="分配权限"
-        width={500}
+        width={700}
         onCancel={() => setPermVisible(false)}
         onOk={savePerm}
       >
-        <Tree
-          checkable
-          treeData={permTree?.data}
-          checkedKeys={permKeys}
-          fieldNames={{
-            title: 'permissionName',
-            key: 'id',
-            children: 'children',
+        <TreeSelect
+          showSearch
+          style={{ width: '100%' }}
+          value={permKeys}
+          placeholder="请选择权限"
+          allowClear
+          multiple
+          treeDefaultExpandAll
+          onChange={setPermKeys}
+          treeData={permTree || []}
+          styles={{
+            popup: {
+              root: { maxHeight: 1500, overflow: 'auto' },
+            },
           }}
-          onCheck={(keys) => setPermKeys(keys as string[])}
         />
       </Modal>
 
