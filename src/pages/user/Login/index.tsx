@@ -12,16 +12,15 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await login(values);
-      const { accessToken, refreshToken, permissionVersion } = res.data;
+      const { accessToken, refreshToken } = res.data;
 
       localStorage.setItem('accessToken', accessToken);
       localStorage.setItem('refreshToken', refreshToken);
-      localStorage.setItem('permissionVersion', permissionVersion);
 
       // ✅ 登录成功后拉取菜单
       const menuRes = await fetchPermissionMenu();
-      const { leftMenuTree, permissionCodes } = menuRes.data;
-
+      const { leftMenuTree, permissionCodes, permissionVersion } = menuRes.data;
+      localStorage.setItem('permissionVersion', permissionVersion);
       localStorage.setItem('menuTree', JSON.stringify(leftMenuTree));
       localStorage.setItem('permissionCodes', JSON.stringify(permissionCodes));
 
@@ -29,6 +28,7 @@ export default function LoginPage() {
         currentUser: res.data,
         menuTree: leftMenuTree,
         permissionCodes,
+        permissionVersion,
       });
 
       message.success('登录成功');

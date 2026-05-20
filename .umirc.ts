@@ -18,7 +18,7 @@ export default defineConfig({
   },
 
   layout: {
-    title: '@umijs/max',
+    title: '@umijs/ma2x',
   },
 
   routes: [
@@ -50,11 +50,6 @@ export default defineConfig({
         { path: '/admin', redirect: '/admin/user' },
         { name: '用户管理', path: '/admin/user', component: './admin/user' },
         { name: '角色管理', path: '/admin/role', component: './admin/role' },
-        {
-          name: '权限管理',
-          path: '/admin/permission',
-          component: './admin/permission',
-        },
       ],
     },
   ],

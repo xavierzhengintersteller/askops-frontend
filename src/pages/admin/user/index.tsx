@@ -1,5 +1,6 @@
 import {
   addUser,
+  assignUserRole,
   blacklistUser,
   deleteUser,
   listRole,
@@ -32,11 +33,15 @@ export default function AdminUser() {
   // 弹窗控制
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [pwdModalVisible, setPwdModalVisible] = useState(false);
+  const [roleModalVisible, setRoleModalVisible] = useState(false);
+
   const [form] = Form.useForm();
   const [pwdForm] = Form.useForm();
+  const [roleForm] = Form.useForm();
+
   const [currentUserId, setCurrentUserId] = useState<number | null>(null);
 
-  // 提交新增
+  // 提交新增用户
   const handleAddUser = async () => {
     const values = await form.validateFields();
     await addUser(values);
@@ -46,7 +51,7 @@ export default function AdminUser() {
     refresh();
   };
 
-  // 切换启用/禁用
+  // 切换启用/禁用状态
   const handleStatusChange = async (userId: number, enabled: boolean) => {
     try {
       await blacklistUser({ userId, enabled });
@@ -91,6 +96,31 @@ export default function AdminUser() {
     }
   };
 
+  // 打开修改角色弹窗 + 回显角色
+  const openEditRole = (record: UserItem) => {
+    setCurrentUserId(record.userId);
+    roleForm.setFieldsValue({
+      roleIds: record.roleIds || [],
+    });
+    setRoleModalVisible(true);
+  };
+
+  // 提交修改角色
+  const handleUpdateRole = async () => {
+    try {
+      const values = await roleForm.validateFields();
+      await assignUserRole({
+        userId: currentUserId,
+        roleIds: values.roleIds,
+      });
+      message.success('角色修改成功');
+      setRoleModalVisible(false);
+      refresh();
+    } catch (err) {
+      message.error('角色修改失败');
+    }
+  };
+
   const columns = [
     { title: '用户名', dataIndex: 'username', key: 'username' },
     {
@@ -120,10 +150,6 @@ export default function AdminUser() {
           </div>
         )) || [],
     },
-
-    // ======================
-    // 状态开关：admin 禁用
-    // ======================
     {
       title: '状态',
       key: 'status',
@@ -136,24 +162,26 @@ export default function AdminUser() {
             checkedChildren="启用"
             unCheckedChildren="禁用"
             onChange={(checked) => handleStatusChange(record.userId, checked)}
-            disabled={isAdmin} // 👈 核心
+            disabled={isAdmin}
           />
         );
       },
     },
-
-    // ======================
-    // 操作列：admin 按钮灰色/隐藏
-    // ======================
     {
       title: '操作',
       key: 'action',
-      width: 200,
+      width: 280,
       render: (_, record: UserItem) => {
         const isAdmin = record.username === 'admin';
         return (
           <Space>
-            {/* 重置密码：admin 禁用 */}
+            <Button
+              type="text"
+              onClick={() => openEditRole(record)}
+              disabled={isAdmin}
+            >
+              修改角色
+            </Button>
             <Button
               type="text"
               onClick={() => openResetPwd(record.userId)}
@@ -161,8 +189,6 @@ export default function AdminUser() {
             >
               重置密码
             </Button>
-
-            {/* 删除：admin 直接不显示 */}
             {!isAdmin && (
               <Popconfirm
                 title="确定删除该用户？"
@@ -218,7 +244,6 @@ export default function AdminUser() {
           >
             <Input placeholder="请输入用户名" />
           </Form.Item>
-
           <Form.Item
             name="password"
             label="密码"
@@ -226,7 +251,6 @@ export default function AdminUser() {
           >
             <Input.Password placeholder="请输入密码" />
           </Form.Item>
-
           <Form.Item
             name="roleIds"
             label="分配角色"
@@ -259,6 +283,32 @@ export default function AdminUser() {
             rules={[{ required: true, message: '请输入新密码' }]}
           >
             <Input.Password placeholder="请输入新密码" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* 修改角色弹窗 */}
+      <Modal
+        title="修改用户角色"
+        open={roleModalVisible}
+        onCancel={() => setRoleModalVisible(false)}
+        onOk={handleUpdateRole}
+        destroyOnClose
+      >
+        <Form form={roleForm} layout="vertical">
+          <Form.Item
+            name="roleIds"
+            label="选择角色"
+            rules={[{ required: true, message: '请选择角色' }]}
+          >
+            <Select
+              mode="multiple"
+              placeholder="请选择角色"
+              options={roleOptions?.data?.map((r) => ({
+                label: r.roleName,
+                value: r.id,
+              }))}
+            />
           </Form.Item>
         </Form>
       </Modal>

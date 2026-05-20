@@ -5,6 +5,7 @@ export interface UserItem {
   username: string;
   enabled: boolean;
   roleNames: string[];
+  roleIds: number[];
   groups: {
     groupId: number;
     groupName: string;
@@ -89,4 +90,17 @@ export interface BlacklistUserDTO {
 export interface UpdateUserPwdDTO {
   userId: number;
   newPassword: string;
+}
+// 给用户分配角色（新增）
+export async function assignUserRole(data: AssignRoleDTO) {
+  return request('/api/admin/user/assign-role', {
+    method: 'POST',
+    data,
+  });
+}
+
+// 类型
+export interface AssignRoleDTO {
+  userId: number;
+  roleIds: number[];
 }
