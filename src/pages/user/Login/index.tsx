@@ -1,59 +1,48 @@
 import { fetchPermissionMenu, login } from '@/services/auth';
-import { useModel } from '@umijs/max';
-import { Button, Form, Input, message } from 'antd';
-import { useState } from 'react';
-import { history } from 'umi';
-
-export default function LoginPage() {
-  const [loading, setLoading] = useState(false);
+import { history, useModel } from '@umijs/max';
+import { Button, Form, Input } from 'antd';
+export default function Login() {
   const { setInitialState } = useModel('@@initialState');
 
-  const onFinish = async (values) => {
-    setLoading(true);
-    try {
-      const res = await login(values);
-      const { accessToken, refreshToken } = res.data;
+  const onFinish = async (values: any) => {
+    const res = await login(values);
 
-      localStorage.setItem('accessToken', accessToken);
-      localStorage.setItem('refreshToken', refreshToken);
+    const { accessToken, refreshToken } = res.data;
 
-      // ✅ 登录成功后拉取菜单
-      const menuRes = await fetchPermissionMenu();
-      const { leftMenuTree, permissionCodes, permissionVersion } = menuRes.data;
-      localStorage.setItem('permissionVersion', permissionVersion);
-      localStorage.setItem('menuTree', JSON.stringify(leftMenuTree));
-      localStorage.setItem('permissionCodes', JSON.stringify(permissionCodes));
+    localStorage.setItem('accessToken', accessToken);
+    localStorage.setItem('refreshToken', refreshToken);
 
-      setInitialState({
-        currentUser: res.data,
-        menuTree: leftMenuTree,
-        permissionCodes,
-        permissionVersion,
-      });
+    const menuRes = await fetchPermissionMenu();
+    const { leftMenuTree, permissionCodes } = menuRes.data;
 
-      message.success('登录成功');
-      history.push('/');
-    } catch (error) {
-      message.error(error.message || '登录失败');
-    } finally {
-      setLoading(false);
-    }
+    localStorage.setItem('menuTree', JSON.stringify(leftMenuTree));
+    localStorage.setItem('permissionCodes', JSON.stringify(permissionCodes));
+
+    setInitialState((s) => ({
+      ...s,
+      currentUser: { token: accessToken },
+      menuTree: leftMenuTree,
+      permissionCodes,
+    }));
+
+    history.push('/');
+    window.location.reload();
   };
 
   return (
-    <div style={{ maxWidth: 400, margin: '100px auto' }}>
+    <div style={{ width: 300, margin: '100px auto' }}>
       <Form onFinish={onFinish}>
-        <Form.Item name="username" rules={[{ required: true }]}>
-          <Input placeholder="用户名" />
+        <Form.Item name="username">
+          <Input />
         </Form.Item>
-        <Form.Item name="password" rules={[{ required: true }]}>
-          <Input.Password placeholder="密码" />
+
+        <Form.Item name="password">
+          <Input.Password />
         </Form.Item>
-        <Form.Item>
-          <Button type="primary" htmlType="submit" loading={loading}>
-            登录
-          </Button>
-        </Form.Item>
+
+        <Button type="primary" htmlType="submit">
+          登录
+        </Button>
       </Form>
     </div>
   );
