@@ -24,7 +24,7 @@ export default defineConfig({
   routes: [
     {
       path: '/',
-      redirect: '/homeee',
+      redirect: '/home',
     },
     {
       path: '/user/login',
@@ -34,8 +34,8 @@ export default defineConfig({
     },
     {
       name: '首页',
-      path: '/homeee',
-      component: './Homeee',
+      path: '/home',
+      component: './home',
     },
     {
       name: '容器管理',
