@@ -1,25 +1,37 @@
+import RightContent from '@/layouts/components/RightContent';
 import { updateRefreshToken } from '@/services/auth';
-import type { RequestConfig, ResponseError } from '@umijs/max';
+import type {
+  RequestConfig,
+  ResponseError,
+  RunTimeLayoutConfig,
+} from '@umijs/max';
 import { history } from '@umijs/max';
 import { message } from 'antd';
 
 // ================= refresh token =================
+
 let isRefreshing = false;
-let queue: ((t: string) => void)[] = [];
+let queue: ((token: string) => void)[] = [];
 
 const resolveQueue = (token: string) => {
   queue.forEach((cb) => cb(token));
   queue = [];
 };
 
-// ================= 菜单过滤（提前定义，解决 ESLint 错误） =================
+// ================= 菜单过滤 =================
+
 function filterMenu(menuList: any[] = [], permissions: string[]) {
   return menuList
     .map((menu) => {
       const children = filterMenu(menu.children || [], permissions);
+
       const hasPermission =
         !menu.permissionCode || permissions.includes(menu.permissionCode);
-      if (!hasPermission && children.length === 0) return null;
+
+      if (!hasPermission && children.length === 0) {
+        return null;
+      }
+
       return {
         path: menu.path,
         name: menu.permissionName,
@@ -27,16 +39,19 @@ function filterMenu(menuList: any[] = [], permissions: string[]) {
         children,
       };
     })
-    .filter((m): m is any => m !== null);
+    .filter(Boolean);
 }
 
 // ================= getInitialState =================
+
 export async function getInitialState() {
   const token = localStorage.getItem('accessToken');
 
   return {
     currentUser: token ? { token } : null,
+
     menuTree: JSON.parse(localStorage.getItem('menuTree') || '[]'),
+
     permissionCodes: JSON.parse(
       localStorage.getItem('permissionCodes') || '[]',
     ),
@@ -44,16 +59,19 @@ export async function getInitialState() {
 }
 
 // ================= request =================
+
 export const request: RequestConfig = {
   requestInterceptors: [
     (url, options) => {
       const token = localStorage.getItem('accessToken');
+
       if (token) {
         options.headers = {
           ...options.headers,
           Authorization: `Bearer ${token}`,
         };
       }
+
       return { url, options };
     },
   ],
@@ -82,6 +100,7 @@ export const request: RequestConfig = {
               ...config.headers,
               Authorization: `Bearer ${token}`,
             };
+
             import('@umijs/max').then(({ request }) => {
               resolve(request(config.url!, config));
             });
@@ -93,16 +112,26 @@ export const request: RequestConfig = {
 
       try {
         const res = await updateRefreshToken(refreshToken);
+
         const newToken = res.data;
 
         localStorage.setItem('accessToken', newToken);
+
         resolveQueue(newToken);
 
+        config.headers = {
+          ...config.headers,
+          Authorization: `Bearer ${newToken}`,
+        };
+
         const { request } = await import('@umijs/max');
+
         return request(config.url!, config);
       } catch (e) {
         localStorage.clear();
+
         history.push('/user/login');
+
         return Promise.reject(e);
       } finally {
         isRefreshing = false;
@@ -111,17 +140,30 @@ export const request: RequestConfig = {
   },
 };
 
-// ================= layout（完全修复版） =================
-export const layout = ({ initialState }: any) => {
+// ================= layout =================
+
+// ================= layout =================
+
+export const layout: RunTimeLayoutConfig = ({ initialState }: any) => {
   return {
-    // 登录页关闭布局
-    layout: (location: any) => {
-      if (location?.pathname === '/user/login') return false;
-      return 'mix';
-    },
+    title: 'AskOps',
+
+    layout: 'mix',
+
+    fixedHeader: true,
+
+    fixSiderbar: true,
+
+    splitMenus: false,
+
+    siderWidth: 208,
+
+    // ===== 右上角用户区域 =====
+    rightContentRender: () => <RightContent />,
 
     menu: {
       locale: false,
+
       request: async () => {
         return filterMenu(
           initialState?.menuTree || [],
@@ -130,10 +172,38 @@ export const layout = ({ initialState }: any) => {
       },
     },
 
-    // 修复：onPageChange 直接接收 location，不是 { location }
-    onPageChange: (location: any) => {
+    // ===== 登录页隐藏 layout =====
+
+    menuRender: (props: any, defaultDom: any) => {
+      if (props.location.pathname === '/user/login') {
+        return false;
+      }
+
+      return defaultDom;
+    },
+
+    headerRender: (props: any, defaultDom: any) => {
+      if (props.location.pathname === '/user/login') {
+        return false;
+      }
+
+      return defaultDom;
+    },
+
+    footerRender: (props: any, defaultDom: any) => {
+      if (props.location.pathname === '/user/login') {
+        return false;
+      }
+
+      return defaultDom;
+    },
+
+    onPageChange: () => {
       const token = localStorage.getItem('accessToken');
-      if (!token && location?.pathname !== '/user/login') {
+
+      const pathname = history.location.pathname;
+
+      if (!token && pathname !== '/user/login') {
         history.push('/user/login');
       }
     },

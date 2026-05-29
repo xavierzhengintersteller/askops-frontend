@@ -11,7 +11,6 @@ export default function Login() {
 
     localStorage.setItem('accessToken', accessToken);
     localStorage.setItem('refreshToken', refreshToken);
-
     const menuRes = await fetchPermissionMenu();
     const { leftMenuTree, permissionCodes } = menuRes.data;
 
