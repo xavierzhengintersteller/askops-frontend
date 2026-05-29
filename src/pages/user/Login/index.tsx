@@ -13,13 +13,16 @@ export default function Login() {
     localStorage.setItem('refreshToken', refreshToken);
     const menuRes = await fetchPermissionMenu();
     const { leftMenuTree, permissionCodes } = menuRes.data;
-
+    localStorage.setItem('username', values.username);
     localStorage.setItem('menuTree', JSON.stringify(leftMenuTree));
     localStorage.setItem('permissionCodes', JSON.stringify(permissionCodes));
 
     setInitialState((s) => ({
       ...s,
-      currentUser: { token: accessToken },
+      currentUser: {
+        token: accessToken,
+        username: values.username,
+      },
       menuTree: leftMenuTree,
       permissionCodes,
     }));

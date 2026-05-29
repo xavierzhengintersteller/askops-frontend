@@ -48,8 +48,12 @@ export async function getInitialState() {
   const token = localStorage.getItem('accessToken');
 
   return {
-    currentUser: token ? { token } : null,
-
+    currentUser: token
+      ? {
+          token,
+          username: localStorage.getItem('username'),
+        }
+      : null,
     menuTree: JSON.parse(localStorage.getItem('menuTree') || '[]'),
 
     permissionCodes: JSON.parse(
