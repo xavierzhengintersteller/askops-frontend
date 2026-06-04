@@ -50,6 +50,11 @@ export default defineConfig({
         { path: '/admin', redirect: '/admin/user' },
         { name: '用户管理', path: '/admin/user', component: './admin/user' },
         { name: '角色管理', path: '/admin/role', component: './admin/role' },
+        {
+          name: 'audit-log',
+          path: '/admin/audit-log',
+          component: './admin/audit-log',
+        },
       ],
     },
   ],
