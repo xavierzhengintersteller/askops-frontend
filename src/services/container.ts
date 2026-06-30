@@ -1,120 +1,134 @@
 import { message } from 'antd';
 import { request } from 'umi';
+
+// 单条容器记录（匹配后端列表records结构）
 export interface Container {
-  Id: string;
-  Names?: string[];
-  Image: string;
-  State: string;
-  Status: string;
-  nodeIp?: string;
-  Created: number;
-  Command: string;
+  nodeIp: string;
+  containerId: string;
+  shortId: string;
+  containerName: string;
+  image: string;
+  imageId: string | null;
+  state: string;
+  status: string;
+  createdAt: string;
+  lastSeenTime: string;
+  ports: any[] | null;
+  command: string;
 }
 
-export interface ContainerResponse {
+// 容器列表分页外层响应
+export interface ContainerPageResp {
   code: number;
   message: string;
-  data: Container[] | string | null;
+  data: {
+    records: Container[];
+    total: number;
+    pageNum: number;
+    pageSize: number;
+    pages: number;
+  };
 }
 
-// 重启参数
+// 容器详情原始Podman结构
+export interface ContainerDetailRaw {
+  Id: string;
+  Created: string;
+  Name: string;
+  State: {
+    Status: string;
+    Running: boolean;
+    StartedAt: string;
+  };
+  Image: string;
+  Config: {
+    Cmd: string[];
+    Env: string[];
+  };
+}
+
+export interface DetailResp {
+  code: number;
+  message: string;
+  data: ContainerDetailRaw;
+}
+
+// 单重启入参（后端接口接收containerId）
 export interface RestartContainerParams {
-  containerName: string;
+  containerId: string;
   nodeIp: string;
 }
 
-// 批量重启
-export interface BatchRestartContainerRequest {
-  containerItems: {
-    containerName: string;
+// 批量提交入参
+export interface BatchRestartSubmitReq {
+  containerItems: Array<{
+    containerId: string;
     nodeIp: string;
-  }[];
+  }>;
 }
 
-export interface BatchRestartContainerResponse {
+// 同步批量接口返回结构（和你给出的示例一致）
+export interface BatchRestartSyncResp {
   total: number;
   success: number;
   fail: number;
-  results: {
+  results: Array<{
     containerName: string;
     nodeIp: string;
     success: boolean;
-    message?: string;
-  }[];
+    message: string;
+  }>;
 }
 
-// ==========================
-// 获取容器列表（支持多选节点 + manual）
-// ==========================
-export async function getContainers(
-  nodeIps?: string[],
-  manual: boolean = false,
-) {
-  const params = nodeIps?.length
-    ? { nodeIps: nodeIps.join(','), manual }
-    : { manual };
-
-  const response = await request<ContainerResponse>(
-    '/api/containers/containers',
-    {
-      method: 'GET',
-      params,
-    },
-  );
-
-  // 无可用节点提示
-  if (response?.code === 100001) {
-    // message.warning(response.message);
-    return [];
+// ===================== 1. 获取分页容器列表 =====================
+export async function getContainers(nodeIps?: string[]) {
+  const params: Record<string, any> = {};
+  if (nodeIps && nodeIps.length > 0 && !nodeIps.includes('all')) {
+    params.nodeIps = nodeIps.join(',');
   }
-
-  // 解析字符串格式数据
-  if (response?.data && typeof response.data === 'string') {
-    try {
-      return JSON.parse(response.data);
-    } catch (e) {
-      console.error('解析容器列表失败', e);
-      return [];
-    }
-  }
-
-  return response?.data || [];
-}
-
-// ==========================
-// 获取节点列表
-// ==========================
-export async function getNodeList() {
-  const res = await request('/api/agent/nodes', {
+  const res = await request<ContainerPageResp>('/api/containers/containers', {
     method: 'GET',
+    params,
   });
-
-  // ✅ 全局统一：只要不是 0，都提示 message
   if (res.code !== 0) {
-    message.warning(res.message);
+    message.error(res.message);
+    return { records: [], total: 0 };
   }
-
-  return res;
+  return res.data;
 }
 
-// ==========================
-// 重启单个容器
-// ==========================
-export async function restartContainer(params: RestartContainerParams) {
+// ===================== 2. 获取容器详情 =====================
+export async function getContainerDetail(nodeIp: string, containerId: string) {
+  const res = await request<DetailResp>('/api/containers/container/detail', {
+    method: 'GET',
+    params: { nodeIp, containerId },
+  });
+  if (res.code !== 0) {
+    message.error(res.message);
+    return null;
+  }
+  return res.data;
+}
+
+// ===================== 3. 单个容器重启 =====================
+export async function restartContainer(req: RestartContainerParams) {
   return request('/api/containers/restart', {
     method: 'POST',
-    data: params,
+    data: req,
   });
 }
 
-// ==========================
-// 批量重启
-// ==========================
-export async function batchRestartContainers(
-  params: BatchRestartContainerRequest,
-) {
-  return request('/api/containers/batch-restart', {
+// ===================== 4. 同步批量重启（无SSE，直接返回结果） =====================
+export async function batchRestartContainers(req: BatchRestartSubmitReq) {
+  return request<BatchRestartSyncResp>('/api/containers/restart-batch', {
     method: 'POST',
-    data: params,
+    data: req,
   });
+}
+
+// ===================== 获取节点列表 =====================
+export async function getNodeList() {
+  const res = await request('/api/containers/nodes', { method: 'GET' });
+  if (res.code !== 0) message.warning(res.message);
+  return res;
 }

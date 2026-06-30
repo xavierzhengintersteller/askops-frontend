@@ -1,6 +1,8 @@
 import {
   batchRestartContainers,
+  BatchRestartSyncResp,
   Container,
+  getContainerDetail,
   getContainers,
   getNodeList,
   restartContainer,
@@ -16,6 +18,7 @@ import {
   Popover,
   Select,
   Space,
+  Table,
   Tag,
 } from 'antd';
 import { isEqual } from 'lodash';
@@ -34,18 +37,18 @@ const ContainerManage: React.FC = () => {
   const [restartLoading, setRestartLoading] = useState<Record<string, boolean>>(
     {},
   );
-  const [batchRestartLoading, setBatchRestartLoading] = useState(false);
+  const [batchTaskLoading, setBatchTaskLoading] = useState(false);
   const [selectedRows, setSelectedRows] = useState<Container[]>([]);
   const [tableData, setTableData] = useState<Container[]>([]);
+  const [tableTotal, setTableTotal] = useState(0);
+  // 搜索
+  const [searchText, setSearchText] = useState('');
 
   // 分页
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 10,
   });
-
-  // 搜索
-  const [searchText, setSearchText] = useState('');
 
   // 排序
   const [sortField, setSortField] = useState<string | undefined>(undefined);
@@ -56,6 +59,12 @@ const ContainerManage: React.FC = () => {
   // 节点筛选
   const [nodeList, setNodeList] = useState<{ ip: string; port: number }[]>([]);
   const [selectedNodeIps, setSelectedNodeIps] = useState<string[]>(['all']);
+
+  // 批量结果弹窗
+  const [batchModalVisible, setBatchModalVisible] = useState(false);
+  const [batchResult, setBatchResult] = useState<BatchRestartSyncResp | null>(
+    null,
+  );
 
   // 拉节点列表
   useEffect(() => {
@@ -70,193 +79,250 @@ const ContainerManage: React.FC = () => {
     fetchNodes();
   }, []);
 
-  // 拉容器列表（自动轮询）
+  // 拉分页容器列表（自动轮询30s）
+  const loadContainerList = async () => {
+    try {
+      const params = selectedNodeIps.includes('all')
+        ? undefined
+        : selectedNodeIps;
+      const pageData = await getContainers(params);
+      setTableData((prev) =>
+        isEqual(prev, pageData.records) ? prev : pageData.records,
+      );
+      setTableTotal(pageData.total);
+    } catch (err) {
+      console.error('获取容器失败', err);
+    }
+  };
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const params = selectedNodeIps.includes('all')
-          ? undefined
-          : selectedNodeIps;
-        const data = await getContainers(params, false);
-        setTableData((prev) => (isEqual(prev, data) ? prev : data));
-      } catch (err) {
-        console.error('获取容器失败', err);
-      }
-    };
-
-    fetchData();
-    const timer = setInterval(fetchData, 30000);
+    loadContainerList();
+    const timer = setInterval(loadContainerList, 30000);
     return () => clearInterval(timer);
   }, [selectedNodeIps]);
 
   // 手动刷新
   const handleManualRefresh = async () => {
-    try {
-      const params = selectedNodeIps.includes('all')
-        ? undefined
-        : selectedNodeIps;
-      const data = await getContainers(params, true);
-      setTableData((prev) => (isEqual(prev, data) ? prev : data));
-      message.success('刷新成功');
-    } catch (err) {
-      console.error('手动刷新失败', err);
-    }
+    await loadContainerList();
+    message.success('刷新成功');
   };
 
-  // 搜索 + 排序
+  // 搜索 + 排序过滤
   const filteredData = useMemo(() => {
     let data = [...tableData];
-
     if (searchText) {
       const txt = searchText.toLowerCase();
       data = data.filter((item) => {
-        const name = (item.Names?.[0] || '').toLowerCase();
-        const image = (item.Image || '').toLowerCase();
-        return name.includes(txt) || image.includes(txt);
+        const name = item.containerName.toLowerCase();
+        const image = item.image.toLowerCase();
+        const cid = item.containerId.toLowerCase();
+        return name.includes(txt) || image.includes(txt) || cid.includes(txt);
       });
     }
 
+    // 排序逻辑
     if (sortField && sortOrder) {
       data.sort((a, b) => {
-        let aVal = '';
-        let bVal = '';
-        if (sortField === 'Names') {
-          aVal = (a.Names?.[0] || '').toLowerCase();
-          bVal = (b.Names?.[0] || '').toLowerCase();
-        } else {
-          aVal = String(a[sortField as keyof Container] || '').toLowerCase();
-          bVal = String(b[sortField as keyof Container] || '').toLowerCase();
-        }
+        let aVal = String(a[sortField as keyof Container] ?? '').toLowerCase();
+        let bVal = String(b[sortField as keyof Container] ?? '').toLowerCase();
         if (aVal < bVal) return sortOrder === 'ascend' ? -1 : 1;
         if (aVal > bVal) return sortOrder === 'ascend' ? 1 : -1;
         return 0;
       });
     }
-
     return data;
   }, [tableData, searchText, sortField, sortOrder]);
 
-  // 单个重启
-  const handleRestart = async (containerName: string, nodeIp: string) => {
-    if (!containerName || !nodeIp) {
+  // 单个容器重启（使用containerId）
+  const handleRestart = async (record: Container) => {
+    const { containerId, nodeIp, containerName } = record;
+    if (!containerId || !nodeIp) {
       message.warning('容器信息不完整');
       return;
     }
     Modal.confirm({
       title: '确认重启容器',
-      content: `是否重启容器：${containerName}？`,
+      content: `是否重启容器【${containerName}】短ID:${record.shortId}`,
       onOk: async () => {
         try {
-          setRestartLoading((prev) => ({ ...prev, [containerName]: true }));
-          await restartContainer({ containerName, nodeIp });
-          message.success('重启成功');
+          setRestartLoading((prev) => ({ ...prev, [containerId]: true }));
+          await restartContainer({ containerId, nodeIp });
+          message.success({
+            content: `容器【${containerName}】重启成功`,
+            duration: 2,
+          });
+
+          // 执行后刷新列表
+          await loadContainerList();
         } catch (error: any) {
           handleRequestError(error);
         } finally {
-          setRestartLoading((prev) => ({ ...prev, [containerName]: false }));
+          setRestartLoading((prev) => ({ ...prev, [containerId]: false }));
         }
       },
     });
   };
 
-  // 批量重启
+  // 同步批量重启（无SSE，请求完成直接弹窗展示结果）
   const handleBatchRestart = async () => {
     if (selectedRows.length === 0) {
-      message.warning('请选择容器');
+      message.warning('请先勾选需要重启的容器');
       return;
     }
     Modal.confirm({
-      title: `确认批量重启 ${selectedRows.length} 个容器？`,
+      title: `确认批量重启 ${selectedRows.length} 个容器`,
       onOk: async () => {
         try {
-          setBatchRestartLoading(true);
-          const items = selectedRows
-            .map((item) => ({
-              containerName: item.Names?.[0]?.replace(/^\//, '') || '',
-              nodeIp: item.nodeIp || '',
-            }))
-            .filter((i) => i.containerName && i.nodeIp);
-          await batchRestartContainers({ containerItems: items });
-          message.success('批量重启成功');
+          setBatchTaskLoading(true);
+          const containerItems = selectedRows.map((item) => ({
+            containerId: item.containerId,
+            nodeIp: item.nodeIp,
+          }));
+          const data = await batchRestartContainers({ containerItems });
+          setBatchResult(data);
+          setBatchModalVisible(true);
+          console.log('批量返回数据', data);
+          // 优先赋值弹窗数据、打开弹窗，再刷新列表
+          setBatchResult(data);
+          setBatchModalVisible(true);
           setSelectedRows([]);
+
+          // 差异化提示
+          if (data.success === data.total) {
+            message.success(`全部${data.total}个容器重启成功`);
+          } else if (data.fail === data.total) {
+            message.error(`全部${data.total}个容器重启失败`);
+          } else {
+            message.info(
+              `批量执行完成：成功${data.success}个，失败${data.fail}个`,
+            );
+          }
+          // 延后刷新列表，避免dom重渲染销毁弹窗
+          setTimeout(() => loadContainerList(), 500);
         } catch (error: any) {
           handleRequestError(error);
         } finally {
-          setBatchRestartLoading(false);
+          setBatchTaskLoading(false);
         }
       },
     });
   };
+  // 容器hover预览浮层
+  const renderDetailContent = (record: Container) => {
+    const showFullDetail = async () => {
+      const detail = await getContainerDetail(
+        record.nodeIp,
+        record.containerId,
+      );
+      if (!detail) return;
+      Modal.info({
+        width: 800,
+        title: `容器详情 ${record.containerName}(${record.shortId})`,
+        content: (
+          <Descriptions column={1} bordered size="small">
+            <Descriptions.Item label="完整容器ID">
+              {detail.Id}
+            </Descriptions.Item>
+            <Descriptions.Item label="容器名称">
+              {detail.Name.replace(/^\//, '')}
+            </Descriptions.Item>
+            <Descriptions.Item label="镜像">{detail.Image}</Descriptions.Item>
+            <Descriptions.Item label="运行状态">
+              {detail.State.Status}
+            </Descriptions.Item>
+            <Descriptions.Item label="创建时间">
+              {detail.Created}
+            </Descriptions.Item>
+            <Descriptions.Item label="启动命令">
+              {detail.Config.Cmd.join(' ')}
+            </Descriptions.Item>
+          </Descriptions>
+        ),
+      });
+    };
+    return (
+      <div style={{ width: 420, fontSize: 12 }}>
+        <Descriptions column={1} bordered size="small">
+          <Descriptions.Item label="完整ID">
+            {record.containerId}
+          </Descriptions.Item>
+          <Descriptions.Item label="短ID">{record.shortId}</Descriptions.Item>
+          <Descriptions.Item label="容器名称">
+            {record.containerName}
+          </Descriptions.Item>
+          <Descriptions.Item label="镜像">{record.image}</Descriptions.Item>
+          <Descriptions.Item label="节点IP">{record.nodeIp}</Descriptions.Item>
+          <Descriptions.Item label="状态">
+            <Tag
+              color={
+                CONTAINER_STATE_MAP[
+                  record.state as keyof typeof CONTAINER_STATE_MAP
+                ]?.color
+              }
+            >
+              {
+                CONTAINER_STATE_MAP[
+                  record.state as keyof typeof CONTAINER_STATE_MAP
+                ]?.text
+              }
+            </Tag>
+          </Descriptions.Item>
+          <Descriptions.Item label="运行描述">
+            {record.status}
+          </Descriptions.Item>
+          <Descriptions.Item label="创建时间">
+            {record.createdAt}
+          </Descriptions.Item>
+        </Descriptions>
+        <div style={{ marginTop: 8, textAlign: 'right' }}>
+          <Button size="small" onClick={showFullDetail}>
+            查看完整Podman详情
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
-  // 详情浮层
-  const renderDetailContent = (record: Container) => (
-    <div style={{ width: 380, fontSize: 12 }}>
-      <Descriptions column={1} bordered size="small">
-        <Descriptions.Item label="容器ID">{record.Id}</Descriptions.Item>
-        <Descriptions.Item label="容器Name">
-          {record.Names?.[0]?.replace(/^\//, '') || '-'}
-        </Descriptions.Item>
-        <Descriptions.Item label="镜像">{record.Image}</Descriptions.Item>
-        <Descriptions.Item label="状态">
-          <Tag
-            color={
-              CONTAINER_STATE_MAP[
-                record.State as keyof typeof CONTAINER_STATE_MAP
-              ]?.color || 'default'
-            }
-          >
-            {CONTAINER_STATE_MAP[
-              record.State as keyof typeof CONTAINER_STATE_MAP
-            ]?.text || record.State}
-          </Tag>
-        </Descriptions.Item>
-        <Descriptions.Item label="运行状态">{record.Status}</Descriptions.Item>
-        <Descriptions.Item label="节点IP">{record.nodeIp}</Descriptions.Item>
-        <Descriptions.Item label="创建时间">
-          {new Date(record.Created * 1000).toLocaleString()}
-        </Descriptions.Item>
-        <Descriptions.Item label="启动命令">{record.Command}</Descriptions.Item>
-      </Descriptions>
-    </div>
-  );
-
+  // 表格列定义
   const columns = [
     {
-      title: '容器名称',
-      dataIndex: 'Names',
-      key: 'Names',
-      width: 150,
+      title: '容器短ID',
+      dataIndex: 'shortId',
+      key: 'shortId',
+      width: 130,
       sorter: true,
-      render: (names: string[]) => names?.[0]?.replace(/^\//g, '') || '-',
+    },
+    {
+      title: '容器名称',
+      dataIndex: 'containerName',
+      key: 'containerName',
+      width: 160,
+      sorter: true,
     },
     {
       title: '镜像',
-      dataIndex: 'Image',
-      key: 'Image',
-      width: 220,
+      dataIndex: 'image',
+      key: 'image',
+      width: 240,
       sorter: true,
     },
     {
       title: '状态',
-      dataIndex: 'State',
-      key: 'State',
+      dataIndex: 'state',
+      key: 'state',
       width: 100,
       sorter: true,
       render: (text: string) => {
         const s = CONTAINER_STATE_MAP[
           text as keyof typeof CONTAINER_STATE_MAP
-        ] || {
-          color: 'default',
-          text: '未知',
-        };
+        ] || { color: 'default', text: '未知' };
         return <Tag color={s.color}>{s.text}</Tag>;
       },
     },
     {
       title: '运行信息',
-      dataIndex: 'Status',
-      key: 'Status',
-      width: 150,
+      dataIndex: 'status',
+      key: 'status',
+      width: 160,
     },
     {
       title: '节点IP',
@@ -265,90 +331,88 @@ const ContainerManage: React.FC = () => {
       width: 140,
     },
     {
+      title: '创建时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 180,
+      sorter: true,
+    },
+    {
       title: '操作',
-      width: 240,
-      render: (_: any, record: Container) => {
-        const name = record.Names?.[0]?.replace(/^\//g, '') || '';
-        return (
-          <Space size="small">
-            <Popover
-              content={renderDetailContent(record)}
-              trigger="hover"
-              placement="right"
-              arrow
-            >
-              <Button size="small" type="text">
-                详情
-              </Button>
-            </Popover>
-
-            <Button
-              type="primary"
-              size="small"
-              danger
-              loading={restartLoading[name]}
-              onClick={() => handleRestart(name, record.nodeIp || '')}
-            >
-              重启
+      width: 220,
+      render: (_: any, record: Container) => (
+        <Space size="small">
+          <Popover
+            content={renderDetailContent(record)}
+            trigger="hover"
+            placement="right"
+            arrow
+          >
+            <Button size="small" type="text">
+              预览
             </Button>
-          </Space>
-        );
-      },
+          </Popover>
+          <Button
+            type="primary"
+            danger
+            size="small"
+            loading={restartLoading[record.containerId]}
+            onClick={() => handleRestart(record)}
+          >
+            重启
+          </Button>
+        </Space>
+      ),
     },
   ];
 
   return (
     <PageContainer title="容器管理">
-      <Space style={{ marginBottom: 16 }}>
+      {/* 顶部筛选栏 */}
+      <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder="选择节点"
           style={{ width: 320 }}
           mode="multiple"
           allowClear
           value={selectedNodeIps}
-          onChange={(val) => {
-            if (val.includes('all')) {
-              setSelectedNodeIps(['all']);
-            } else {
-              setSelectedNodeIps(val);
-            }
-          }}
+          onChange={(val) =>
+            setSelectedNodeIps(val.includes('all') ? ['all'] : val)
+          }
           options={[
             { label: '全部节点', value: 'all' },
             ...nodeList.map((n) => ({ label: n.ip, value: n.ip })),
           ]}
         />
-
         <Input
-          placeholder="搜索容器名称/镜像"
-          style={{ width: 280 }}
+          placeholder="搜索容器ID/名称/镜像"
+          style={{ width: 300 }}
           value={searchText}
           onChange={(e) => setSearchText(e.target.value)}
           allowClear
         />
-
-        <Button onClick={handleManualRefresh} type="default">
-          手动刷新
-        </Button>
+        <Button onClick={handleManualRefresh}>手动刷新</Button>
       </Space>
 
+      {/* 容器表格 */}
       <ProTable<Container>
         columns={columns}
         actionRef={actionRef}
         dataSource={filteredData}
-        rowKey="Id"
+        rowKey="containerId"
         search={false}
+        // 修复排序失效：绑定当前排序字段、顺序，onSort 更新状态触发useMemo重排
         sort={{
           field: sortField,
           order: sortOrder,
         }}
-        onSort={(s) => {
-          setSortField(s.field);
-          setSortOrder(s.order);
+        onSort={(sortParams) => {
+          setSortField(sortParams.field as string);
+          setSortOrder(sortParams.order);
         }}
         pagination={{
           ...pagination,
-          total: filteredData.length,
+          total: tableTotal,
           showSizeChanger: true,
           showQuickJumper: true,
           pageSizeOptions: ['10', '20', '50', '100'],
@@ -361,13 +425,71 @@ const ContainerManage: React.FC = () => {
             key="batch"
             type="primary"
             danger
-            loading={batchRestartLoading}
+            loading={batchTaskLoading}
             onClick={handleBatchRestart}
           >
-            批量重启
+            批量重启选中容器
           </Button>,
         ]}
       />
+
+      {/* 批量执行结果弹窗（同步接口直接返回全部结果） */}
+      <Modal
+        open={batchModalVisible}
+        title="批量重启执行结果"
+        width={720}
+        footer={
+          <Button onClick={() => setBatchModalVisible(false)}>关闭</Button>
+        }
+        onCancel={() => setBatchModalVisible(false)}
+      >
+        {batchResult ? (
+          <>
+            <div
+              style={{
+                marginBottom: 16,
+                padding: '12px 16px',
+                background: '#fafafa',
+                borderRadius: 6,
+                display: 'flex',
+                gap: 24,
+                alignItems: 'center',
+              }}
+            >
+              <Tag color="green">成功 {batchResult.success}</Tag>
+
+              <Tag color="red">失败 {batchResult.fail}</Tag>
+
+              <span>共 {batchResult.total} 个容器</span>
+            </div>
+            {/* 下面你的 Table 完全不用动 */}
+            <Table
+              size="small"
+              bordered
+              rowKey="containerName"
+              dataSource={batchResult.results}
+              pagination={false}
+              scroll={{ y: 350 }}
+              columns={[
+                { title: '容器名称', dataIndex: 'containerName', width: 360 },
+                { title: '节点IP', dataIndex: 'nodeIp', width: 140 },
+                {
+                  title: '执行结果',
+                  width: 100,
+
+                  render: (_, row) => (
+                    <Tag color={row.success ? 'success' : 'error'}>
+                      {row.success ? '成功' : '失败'}
+                    </Tag>
+                  ),
+                },
+              ]}
+            />
+          </>
+        ) : (
+          <div>批量执行结果加载中，请稍候...</div>
+        )}
+      </Modal>
     </PageContainer>
   );
 };
