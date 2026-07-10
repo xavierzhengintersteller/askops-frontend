@@ -21,8 +21,17 @@ import {
   Table,
   Tag,
 } from 'antd';
-import { isEqual } from 'lodash';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+
+// 和后端 DTO 对齐的查询参数类型
+interface ContainerQueryDTO {
+  nodeIps?: string[];
+  manual: boolean;
+  pageNum: number;
+  pageSize: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+}
 
 const CONTAINER_STATE_MAP = {
   running: { color: 'success', text: '运行中' },
@@ -41,16 +50,16 @@ const ContainerManage: React.FC = () => {
   const [selectedRows, setSelectedRows] = useState<Container[]>([]);
   const [tableData, setTableData] = useState<Container[]>([]);
   const [tableTotal, setTableTotal] = useState(0);
-  // 搜索
+  // 本地搜索文本（前端内存过滤）
   const [searchText, setSearchText] = useState('');
 
-  // 分页
+  // 分页状态（对应后端 pageNum / pageSize）
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 10,
   });
 
-  // 排序
+  // 排序状态（转后端 asc / desc）
   const [sortField, setSortField] = useState<string | undefined>(undefined);
   const [sortOrder, setSortOrder] = useState<'ascend' | 'descend' | undefined>(
     undefined,
@@ -60,13 +69,13 @@ const ContainerManage: React.FC = () => {
   const [nodeList, setNodeList] = useState<{ ip: string; port: number }[]>([]);
   const [selectedNodeIps, setSelectedNodeIps] = useState<string[]>(['all']);
 
-  // 批量结果弹窗
+  // 批量弹窗
   const [batchModalVisible, setBatchModalVisible] = useState(false);
   const [batchResult, setBatchResult] = useState<BatchRestartSyncResp | null>(
     null,
   );
 
-  // 拉节点列表
+  // 拉取节点下拉列表
   useEffect(() => {
     const fetchNodes = async () => {
       const res = await getNodeList();
@@ -79,34 +88,52 @@ const ContainerManage: React.FC = () => {
     fetchNodes();
   }, []);
 
-  // 拉分页容器列表（自动轮询30s）
-  const loadContainerList = async () => {
+  // 核心：请求后端分页接口，接收 isManual 控制 manual 字段
+  const loadContainerList = async (isManual = false) => {
     try {
-      const params = selectedNodeIps.includes('all')
-        ? undefined
-        : selectedNodeIps;
-      const pageData = await getContainers(params);
-      setTableData((prev) =>
-        isEqual(prev, pageData.records) ? prev : pageData.records,
-      );
-      setTableTotal(pageData.total);
+      // 组装后端完整 DTO 参数
+      const queryParams: ContainerQueryDTO = {
+        manual: isManual,
+        pageNum: pagination.current,
+        pageSize: pagination.pageSize,
+        sortField,
+        sortOrder:
+          sortOrder === 'ascend'
+            ? 'asc'
+            : sortOrder === 'descend'
+            ? 'desc'
+            : undefined,
+        nodeIps: selectedNodeIps.includes('all') ? undefined : selectedNodeIps,
+      };
+      const pageData = await getContainers(queryParams);
+      setTableData(pageData.records || []);
+      setTableTotal(pageData.total || 0);
     } catch (err) {
       console.error('获取容器失败', err);
+      message.error('查询容器列表失败');
     }
   };
+
+  // 页面初始化 + 30s 轮询刷新（不强制同步DB）
   useEffect(() => {
     loadContainerList();
-    const timer = setInterval(loadContainerList, 30000);
+    const timer = setInterval(() => loadContainerList(), 30000);
     return () => clearInterval(timer);
+  }, []);
+
+  // 切换节点筛选，重置页码并重新请求后端
+  useEffect(() => {
+    setPagination((prev) => ({ ...prev, current: 1 }));
+    loadContainerList();
   }, [selectedNodeIps]);
 
-  // 手动刷新
+  // 手动刷新：携带 manual=true 强制同步DB
   const handleManualRefresh = async () => {
-    await loadContainerList();
-    message.success('刷新成功');
+    await loadContainerList(true);
+    message.success('刷新成功，已同步最新容器数据');
   };
 
-  // 搜索 + 排序过滤
+  // 仅前端本地文本模糊搜索，分页/排序/节点全部交给后端处理
   const filteredData = useMemo(() => {
     let data = [...tableData];
     if (searchText) {
@@ -118,21 +145,10 @@ const ContainerManage: React.FC = () => {
         return name.includes(txt) || image.includes(txt) || cid.includes(txt);
       });
     }
-
-    // 排序逻辑
-    if (sortField && sortOrder) {
-      data.sort((a, b) => {
-        let aVal = String(a[sortField as keyof Container] ?? '').toLowerCase();
-        let bVal = String(b[sortField as keyof Container] ?? '').toLowerCase();
-        if (aVal < bVal) return sortOrder === 'ascend' ? -1 : 1;
-        if (aVal > bVal) return sortOrder === 'ascend' ? 1 : -1;
-        return 0;
-      });
-    }
     return data;
-  }, [tableData, searchText, sortField, sortOrder]);
+  }, [tableData, searchText]);
 
-  // 单个容器重启（使用containerId）
+  // 单行重启容器
   const handleRestart = async (record: Container) => {
     const { containerId, nodeIp, containerName } = record;
     if (!containerId || !nodeIp) {
@@ -150,8 +166,6 @@ const ContainerManage: React.FC = () => {
             content: `容器【${containerName}】重启成功`,
             duration: 2,
           });
-
-          // 执行后刷新列表
           await loadContainerList();
         } catch (error: any) {
           handleRequestError(error);
@@ -162,7 +176,7 @@ const ContainerManage: React.FC = () => {
     });
   };
 
-  // 同步批量重启（无SSE，请求完成直接弹窗展示结果）
+  // 批量重启容器
   const handleBatchRestart = async () => {
     if (selectedRows.length === 0) {
       message.warning('请先勾选需要重启的容器');
@@ -180,13 +194,8 @@ const ContainerManage: React.FC = () => {
           const data = await batchRestartContainers({ containerItems });
           setBatchResult(data);
           setBatchModalVisible(true);
-          console.log('批量返回数据', data);
-          // 优先赋值弹窗数据、打开弹窗，再刷新列表
-          setBatchResult(data);
-          setBatchModalVisible(true);
           setSelectedRows([]);
 
-          // 差异化提示
           if (data.success === data.total) {
             message.success(`全部${data.total}个容器重启成功`);
           } else if (data.fail === data.total) {
@@ -196,7 +205,6 @@ const ContainerManage: React.FC = () => {
               `批量执行完成：成功${data.success}个，失败${data.fail}个`,
             );
           }
-          // 延后刷新列表，避免dom重渲染销毁弹窗
           setTimeout(() => loadContainerList(), 500);
         } catch (error: any) {
           handleRequestError(error);
@@ -206,7 +214,8 @@ const ContainerManage: React.FC = () => {
       },
     });
   };
-  // 容器hover预览浮层
+
+  // 悬浮预览弹窗内容
   const renderDetailContent = (record: Container) => {
     const showFullDetail = async () => {
       const detail = await getContainerDetail(
@@ -282,7 +291,6 @@ const ContainerManage: React.FC = () => {
     );
   };
 
-  // 表格列定义
   const columns = [
     {
       title: '容器短ID',
@@ -368,7 +376,6 @@ const ContainerManage: React.FC = () => {
 
   return (
     <PageContainer title="容器管理">
-      {/* 顶部筛选栏 */}
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           placeholder="选择节点"
@@ -394,21 +401,22 @@ const ContainerManage: React.FC = () => {
         <Button onClick={handleManualRefresh}>手动刷新</Button>
       </Space>
 
-      {/* 容器表格 */}
       <ProTable<Container>
         columns={columns}
         actionRef={actionRef}
         dataSource={filteredData}
         rowKey="containerId"
         search={false}
-        // 修复排序失效：绑定当前排序字段、顺序，onSort 更新状态触发useMemo重排
         sort={{
           field: sortField,
           order: sortOrder,
         }}
-        onSort={(sortParams) => {
+        // 表头排序：更新状态 + 重置第一页 + 请求后端
+        onSort={async (sortParams) => {
           setSortField(sortParams.field as string);
           setSortOrder(sortParams.order);
+          setPagination((prev) => ({ ...prev, current: 1 }));
+          await loadContainerList();
         }}
         pagination={{
           ...pagination,
@@ -416,7 +424,11 @@ const ContainerManage: React.FC = () => {
           showSizeChanger: true,
           showQuickJumper: true,
           pageSizeOptions: ['10', '20', '50', '100'],
-          onChange: (current, pageSize) => setPagination({ current, pageSize }),
+          // 切换页码/每页条数，请求后端
+          onChange: async (current, pageSize) => {
+            setPagination({ current, pageSize });
+            await loadContainerList();
+          },
         }}
         bordered
         rowSelection={{ onChange: (_, rows) => setSelectedRows(rows) }}
@@ -433,7 +445,6 @@ const ContainerManage: React.FC = () => {
         ]}
       />
 
-      {/* 批量执行结果弹窗（同步接口直接返回全部结果） */}
       <Modal
         open={batchModalVisible}
         title="批量重启执行结果"
@@ -457,12 +468,9 @@ const ContainerManage: React.FC = () => {
               }}
             >
               <Tag color="green">成功 {batchResult.success}</Tag>
-
               <Tag color="red">失败 {batchResult.fail}</Tag>
-
               <span>共 {batchResult.total} 个容器</span>
             </div>
-            {/* 下面你的 Table 完全不用动 */}
             <Table
               size="small"
               bordered
@@ -476,7 +484,6 @@ const ContainerManage: React.FC = () => {
                 {
                   title: '执行结果',
                   width: 100,
-
                   render: (_, row) => (
                     <Tag color={row.success ? 'success' : 'error'}>
                       {row.success ? '成功' : '失败'}

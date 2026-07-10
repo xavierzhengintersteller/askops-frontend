@@ -15,7 +15,8 @@
     "@ant-design/pro-components": "^2.4.4",
     "@umijs/max": "^4.6.24",
     "ahooks": "^3.9.7",
-    "antd": "^5.4.0"
+    "antd": "^5.4.0",
+    "qs": "^6.15.3"
   },
   "devDependencies": {
     "@babel/preset-env": "^7.29.0",

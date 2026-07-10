@@ -16,7 +16,14 @@ export interface Container {
   ports: any[] | null;
   command: string;
 }
-
+export interface ContainerQueryDTO {
+  nodeIps?: string[];
+  manual: boolean;
+  pageNum: number;
+  pageSize: number;
+  sortField?: string;
+  sortOrder?: 'asc' | 'desc';
+}
 // 容器列表分页外层响应
 export interface ContainerPageResp {
   code: number;
@@ -80,21 +87,17 @@ export interface BatchRestartSyncResp {
   }>;
 }
 
-// ===================== 1. 获取分页容器列表 =====================
-export async function getContainers(nodeIps?: string[]) {
-  const params: Record<string, any> = {};
-  if (nodeIps && nodeIps.length > 0 && !nodeIps.includes('all')) {
-    params.nodeIps = nodeIps.join(',');
-  }
-  const res = await request<ContainerPageResp>('/api/containers/containers', {
-    method: 'GET',
+/**
+ * 分页查询容器列表 GET /containers @ModelAttribute
+ */
+export async function getContainers(params: ContainerQueryDTO) {
+  return request.get('/containers', {
     params,
+    // axios 原生配置，无需引入 qs
+    paramsSerializer: {
+      indexes: null, // 数组拼接成 nodeIps=xx&nodeIps=yy，适配后端 @ModelAttribute List
+    },
   });
-  if (res.code !== 0) {
-    message.error(res.message);
-    return { records: [], total: 0 };
-  }
-  return res.data;
 }
 
 // ===================== 2. 获取容器详情 =====================
